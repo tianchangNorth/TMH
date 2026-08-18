@@ -2,10 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildTmlBalanceRequestBody,
   buildTmlRequestBody,
+  decodeTmlBalancePayload,
   decodeTmlPayload,
   formatHttpFailure,
-  getMealTitle,
+  getQrTitle,
   parseBoolean,
   validateReceiveIdType,
 } from "../src/lib.js";
@@ -23,6 +25,20 @@ test("does not expose a missing QR payload", () => {
   assert.throws(() => decodeTmlPayload('{"code":200}'), /data 字段/);
 });
 
+test("decodes the total balance from the TML balance response", () => {
+  assert.equal(decodeTmlBalancePayload(JSON.stringify({
+    code: "200",
+    body: { totalBalance: "123.45" },
+  })), "123.45");
+});
+
+test("rejects a balance response without a numeric totalBalance", () => {
+  assert.throws(
+    () => decodeTmlBalancePayload('{"code":"200","body":{}}'),
+    /totalBalance/,
+  );
+});
+
 test("rejects unsupported Feishu receiver id types", () => {
   assert.throws(() => validateReceiveIdType("phone"), /不支持/);
 });
@@ -36,6 +52,20 @@ test("builds the exact TML request body field names", () => {
     parkId: 3,
   }), {
     userId: "user",
+    loginsession: "session",
+    globalAreaId: 1,
+    areaId: 2,
+    parkId: 3,
+  });
+});
+
+test("builds the TML balance request without a userId", () => {
+  assert.deepEqual(buildTmlBalanceRequestBody({
+    tmlLoginSession: "session",
+    globalAreaId: 1,
+    areaId: 2,
+    parkId: 3,
+  }), {
     loginsession: "session",
     globalAreaId: 1,
     areaId: 2,
@@ -64,9 +94,13 @@ test("formats safe Feishu HTTP diagnostics without dumping arbitrary bodies", ()
   }), "TML 二维码接口HTTP 500");
 });
 
-test("selects the meal title using Asia/Shanghai time", () => {
-  assert.equal(getMealTitle(new Date("2026-08-18T00:30:00Z")), "今日早餐二维码");
-  assert.equal(getMealTitle(new Date("2026-08-18T03:30:00Z")), "今日午餐二维码");
-  assert.equal(getMealTitle(new Date(), "breakfast"), "今日早餐二维码");
-  assert.equal(getMealTitle(new Date(), "lunch"), "今日午餐二维码");
+test("formats the QR title with the Asia/Shanghai calendar date", () => {
+  assert.equal(
+    getQrTitle(new Date("2026-08-17T16:30:00Z"), "123.45"),
+    "【2026年8月18日】通明湖付款码 当前余额：123.45 元",
+  );
+  assert.equal(
+    getQrTitle(new Date("2026-08-18T16:00:00Z"), "0"),
+    "【2026年8月19日】通明湖付款码 当前余额：0 元",
+  );
 });

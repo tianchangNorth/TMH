@@ -9,12 +9,15 @@
     "node": ">=20.18.1"
   },
   "scripts": {
-    "check": "node --check src/send-qr.js && node --check src/lib.js",
+    "check": "node --check src/send-qr.js && node --check src/feishu-trigger.js && node --check src/feishu-listener.js && node --check src/lib.js",
     "config:check": "node src/send-qr.js --check-config",
+    "listen": "node src/feishu-listener.js",
+    "listen:check": "node src/feishu-listener.js --check-config",
     "send": "node src/send-qr.js",
     "test": "node --test"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.73.0",
     "qrcode": "^1.5.4",
     "undici": "^7.28.0"
   }

@@ -17,23 +17,27 @@ fi
 
 chmod 600 "${project_dir}/.env"
 "${node_bin}" "${project_dir}/src/send-qr.js" --check-config
+"${node_bin}" "${project_dir}/src/feishu-listener.js" --check-config
 mkdir -p "${unit_dir}"
 
 escaped_project_dir="${project_dir//|/\\|}"
 escaped_node_bin="${node_bin//|/\\|}"
-sed \
-  -e "s|__PROJECT_DIR__|${escaped_project_dir}|g" \
-  -e "s|__NODE_BIN__|${escaped_node_bin}|g" \
-  "${project_dir}/systemd/tml-feishu-qr.service.in" \
-  > "${unit_dir}/tml-feishu-qr.service"
+for service_name in tml-feishu-qr tml-feishu-listener; do
+  sed \
+    -e "s|__PROJECT_DIR__|${escaped_project_dir}|g" \
+    -e "s|__NODE_BIN__|${escaped_node_bin}|g" \
+    "${project_dir}/systemd/${service_name}.service.in" \
+    > "${unit_dir}/${service_name}.service"
+done
 
 install -m 0644 \
   "${project_dir}/systemd/tml-feishu-qr.timer" \
   "${unit_dir}/tml-feishu-qr.timer"
 
 systemctl --user daemon-reload
-systemctl --user enable tml-feishu-qr.timer
-systemctl --user restart tml-feishu-qr.timer
+systemctl --user enable tml-feishu-qr.timer tml-feishu-listener.service
+systemctl --user restart tml-feishu-qr.timer tml-feishu-listener.service
 
-echo "已启用每日 08:30 和 11:30（Asia/Shanghai）定时任务。"
+echo "已启用每日 08:30、11:30 定时任务和飞书长连接监听服务。"
 systemctl --user list-timers tml-feishu-qr.timer --no-pager
+systemctl --user status tml-feishu-listener.service --no-pager

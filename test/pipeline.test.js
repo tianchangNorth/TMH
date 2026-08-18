@@ -6,6 +6,8 @@ import { once } from "node:events";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getQrTitle } from "../src/lib.js";
+
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 async function readRequestBody(request) {
@@ -16,6 +18,7 @@ async function readRequestBody(request) {
 
 test("runs the complete TML to Feishu image pipeline against local APIs", async (context) => {
   const calls = [];
+  const expectedTitle = getQrTitle(new Date(), "123.45");
   const server = createServer(async (request, response) => {
     const body = await readRequestBody(request);
     calls.push({ url: request.url, headers: request.headers, body });
@@ -33,6 +36,25 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
       assert.equal(request.headers.loginsession, "test-session");
       assert.equal(request.headers.cookie, "loginsession=test-session");
       response.end(JSON.stringify(JSON.stringify({ code: 200, data: "test-qr-payload" })));
+      return;
+    }
+
+    if (request.url === "/balance") {
+      const payload = JSON.parse(body.toString("utf8"));
+      assert.deepEqual(payload, {
+        loginsession: "test-session",
+        globalAreaId: 1,
+        areaId: 1,
+        parkId: 1,
+      });
+      assert.equal(request.headers.loginsession, "test-session");
+      assert.equal(request.headers.cookie, "loginsession=test-session");
+      response.end(JSON.stringify({
+        code: "200",
+        message: "操作成功",
+        body: { totalBalance: "123.45" },
+        success: true,
+      }));
       return;
     }
 
@@ -62,7 +84,7 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
       assert.equal(payload.msg_type, "post");
       assert.deepEqual(JSON.parse(payload.content), {
         zh_cn: {
-          title: "今日早餐二维码",
+          title: expectedTitle,
           content: [[{ tag: "img", image_key: "test-image-key" }]],
         },
       });
@@ -86,6 +108,7 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
     env: {
       ...process.env,
       TML_API_URL: `${baseUrl}/tml`,
+      TML_BALANCE_API_URL: `${baseUrl}/balance`,
       TML_USER_ID: "test-user",
       TML_LOGIN_SESSION: "test-session",
       FEISHU_API_BASE: `${baseUrl}/open-apis`,
@@ -95,7 +118,6 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
       FEISHU_RECEIVE_ID_TYPE: "open_id",
       FEISHU_FAILURE_NOTIFICATION: "false",
       KEEP_QR: "false",
-      MEAL_TYPE: "breakfast",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -107,6 +129,7 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
 
   const [exitCode] = await once(child, "exit");
   assert.equal(exitCode, 0, stderr);
-  assert.match(stdout, /今日早餐二维码已发送到飞书/);
-  assert.equal(calls.length, 4);
+  assert.match(stdout, /通明湖付款码已发送到飞书/);
+  assert.doesNotMatch(stdout, /123\.45/);
+  assert.equal(calls.length, 5);
 });

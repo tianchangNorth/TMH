@@ -1,17 +1,20 @@
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import QRCode from "qrcode";
 import { FormData, ProxyAgent, fetch } from "undici";
 
 import {
+  buildTmlBalanceRequestBody,
   buildTmlRequestBody,
+  decodeTmlBalancePayload,
   decodeTmlPayload,
   formatHttpFailure,
-  getMealTitle,
+  getQrTitle,
   parseBoolean,
   parsePositiveInteger,
   requireEnvironment,
@@ -19,6 +22,7 @@ import {
 } from "./lib.js";
 
 const DEFAULT_TML_API_URL = "https://isp.tml-itcity.com/ipark-mobile/consume/getQRCodeEncrypt";
+const DEFAULT_TML_BALANCE_API_URL = "https://isp.tml-itcity.com/portal/H5/pasc/member/queryBalance";
 const DEFAULT_TML_ORIGIN = "https://isp.tml-itcity.com";
 const DEFAULT_TML_REFERER = "https://isp.tml-itcity.com/front/miniWallet/";
 const DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781 MiniProgramEnv/Mac";
@@ -51,7 +55,7 @@ function parseDotEnvLine(line, lineNumber) {
   return [key, value];
 }
 
-async function loadDotEnv() {
+export async function loadDotEnv() {
   const envFile = resolve(process.env.ENV_FILE || join(process.cwd(), ".env"));
   let contents;
 
@@ -75,7 +79,7 @@ async function loadDotEnv() {
   }
 }
 
-function loadConfig() {
+export function loadConfig() {
   requireEnvironment(process.env, [
     "TML_USER_ID",
     "TML_LOGIN_SESSION",
@@ -86,6 +90,7 @@ function loadConfig() {
 
   return {
     tmlApiUrl: process.env.TML_API_URL || DEFAULT_TML_API_URL,
+    tmlBalanceApiUrl: process.env.TML_BALANCE_API_URL || DEFAULT_TML_BALANCE_API_URL,
     tmlOrigin: process.env.TML_ORIGIN || DEFAULT_TML_ORIGIN,
     tmlReferer: process.env.TML_REFERER || DEFAULT_TML_REFERER,
     tmlUserAgent: process.env.TML_USER_AGENT || DEFAULT_USER_AGENT,
@@ -104,7 +109,9 @@ function loadConfig() {
     failureNotification: parseBoolean(process.env.FEISHU_FAILURE_NOTIFICATION || "true", "FEISHU_FAILURE_NOTIFICATION"),
     keepQr: parseBoolean(process.env.KEEP_QR || "false", "KEEP_QR"),
     qrOutputPath: process.env.QR_OUTPUT_PATH || "consume-qr.png",
-    mealType: process.env.MEAL_TYPE?.trim() || "",
+    sendLockPath: resolve(process.env.QR_SEND_LOCK_PATH || join(process.cwd(), ".runtime", "qr-send.lock")),
+    sendLockTimeoutMs: parsePositiveInteger(process.env.QR_SEND_LOCK_TIMEOUT_MS || "75000", "QR_SEND_LOCK_TIMEOUT_MS"),
+    sendLockStaleMs: parsePositiveInteger(process.env.QR_SEND_LOCK_STALE_MS || "180000", "QR_SEND_LOCK_STALE_MS"),
   };
 }
 
@@ -175,6 +182,31 @@ async function fetchQrContent(config) {
   }
 }
 
+async function fetchTotalBalance(config) {
+  const dispatcher = config.proxyUrl ? new ProxyAgent(config.proxyUrl) : undefined;
+  try {
+    const rawText = await fetchResponse(config.tmlBalanceApiUrl, {
+      method: "POST",
+      dispatcher,
+      headers: {
+        accept: "application/json, text/plain, */*",
+        "accept-language": "zh-CN,zh;q=0.9",
+        "content-type": "application/json;charset=UTF-8",
+        cookie: `loginsession=${config.tmlLoginSession}`,
+        loginsession: config.tmlLoginSession,
+        origin: config.tmlOrigin,
+        referer: config.tmlReferer,
+        "user-agent": config.tmlUserAgent,
+      },
+      body: JSON.stringify(buildTmlBalanceRequestBody(config)),
+    }, "TML 余额接口", config.timeoutMs);
+
+    return decodeTmlBalancePayload(rawText);
+  } finally {
+    await dispatcher?.close();
+  }
+}
+
 async function getFeishuToken(config) {
   const rawText = await fetchResponse(`${config.feishuApiBase}/auth/v3/tenant_access_token/internal`, {
     method: "POST",
@@ -211,9 +243,18 @@ async function uploadFeishuImage(config, token, imagePath) {
   return payload.data.image_key;
 }
 
-async function sendFeishuMessage(config, token, msgType, content, uuid = randomUUID()) {
+async function sendFeishuMessage(
+  config,
+  token,
+  msgType,
+  content,
+  uuid = randomUUID(),
+  destination = {},
+) {
+  const receiveId = destination.receiveId || config.feishuReceiveId;
+  const receiveIdType = validateReceiveIdType(destination.receiveIdType || config.feishuReceiveIdType);
   const url = new URL(`${config.feishuApiBase}/im/v1/messages`);
-  url.searchParams.set("receive_id_type", config.feishuReceiveIdType);
+  url.searchParams.set("receive_id_type", receiveIdType);
 
   const rawText = await fetchResponse(url, {
     method: "POST",
@@ -222,7 +263,7 @@ async function sendFeishuMessage(config, token, msgType, content, uuid = randomU
       "content-type": "application/json; charset=utf-8",
     },
     body: JSON.stringify({
-      receive_id: config.feishuReceiveId,
+      receive_id: receiveId,
       msg_type: msgType,
       content: JSON.stringify(content),
       uuid,
@@ -244,7 +285,7 @@ async function saveQrCopy(config, temporaryPath) {
   console.log(`[信息] 已保留二维码副本：${destination}`);
 }
 
-async function notifyFailure(config, error) {
+export async function notifyFailure(config, error, destination = {}) {
   if (!config?.failureNotification) return;
   try {
     const token = await getFeishuToken(config);
@@ -253,11 +294,113 @@ async function notifyFailure(config, error) {
       timeStyle: "medium",
       timeZone: "Asia/Shanghai",
     }).format(new Date());
-    await sendFeishuMessage(config, token, "text", {
-      text: `每日消费二维码生成失败\n时间：${time}\n原因：${error.message}`,
-    });
+    await sendFeishuMessage(
+      config,
+      token,
+      "text",
+      { text: `消费二维码生成失败\n时间：${time}\n原因：${error.message}` },
+      randomUUID(),
+      destination,
+    );
   } catch (notifyError) {
     console.error(`[失败通知未送达] ${notifyError.message}`);
+  }
+}
+
+async function acquireSendLock(config) {
+  await mkdir(dirname(config.sendLockPath), { recursive: true, mode: 0o700 });
+  const ownerId = randomUUID();
+  const ownerPath = join(config.sendLockPath, "owner");
+  const deadline = Date.now() + config.sendLockTimeoutMs;
+  let loggedWait = false;
+
+  while (true) {
+    try {
+      await mkdir(config.sendLockPath, { mode: 0o700 });
+      await writeFile(ownerPath, ownerId, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      return async () => {
+        try {
+          if ((await readFile(ownerPath, "utf8")) === ownerId) {
+            await rm(config.sendLockPath, { recursive: true, force: true });
+          }
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      };
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+
+    try {
+      const lockStat = await stat(config.sendLockPath);
+      if (Date.now() - lockStat.mtimeMs > config.sendLockStaleMs) {
+        console.warn("[警告] 清理超时的二维码发送锁");
+        await rm(config.sendLockPath, { recursive: true, force: true });
+        continue;
+      }
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(`等待其他二维码发送任务超时（${config.sendLockTimeoutMs}ms）`);
+    }
+    if (!loggedWait) {
+      console.log("[等待] 另一项二维码发送任务正在运行");
+      loggedWait = true;
+    }
+    await delay(250);
+  }
+}
+
+export async function runQrPipeline(config, options = {}) {
+  const destination = {
+    receiveId: options.receiveId || config.feishuReceiveId,
+    receiveIdType: options.receiveIdType || config.feishuReceiveIdType,
+  };
+  const releaseLock = await acquireSendLock(config);
+
+  let temporaryDirectory;
+
+  try {
+    temporaryDirectory = await mkdtemp(join(tmpdir(), "tml-qr-"));
+    const temporaryQrPath = join(temporaryDirectory, "consume-qr.png");
+    console.log("[开始] 获取通明湖付款码和当前余额");
+    const [qrContent, totalBalance] = await Promise.all([
+      fetchQrContent(config),
+      fetchTotalBalance(config),
+    ]);
+    await QRCode.toFile(temporaryQrPath, qrContent, {
+      type: "png",
+      errorCorrectionLevel: "M",
+      margin: 4,
+      width: 600,
+    });
+    await saveQrCopy(config, temporaryQrPath);
+
+    const token = await getFeishuToken(config);
+    const imageKey = await uploadFeishuImage(config, token, temporaryQrPath);
+    const title = getQrTitle(new Date(), totalBalance);
+    await sendFeishuMessage(
+      config,
+      token,
+      "post",
+      {
+        zh_cn: {
+          title,
+          content: [[{ tag: "img", image_key: imageKey }]],
+        },
+      },
+      options.messageUuid || randomUUID(),
+      destination,
+    );
+    console.log(`[成功] 通明湖付款码已发送到飞书（${destination.receiveIdType}）`);
+  } finally {
+    if (temporaryDirectory) {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+    await releaseLock();
   }
 }
 
@@ -270,36 +413,12 @@ async function main() {
     return;
   }
 
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), "tml-qr-"));
-  const temporaryQrPath = join(temporaryDirectory, "consume-qr.png");
-
   try {
-    console.log("[开始] 获取每日消费二维码");
-    const qrContent = await fetchQrContent(config);
-    await QRCode.toFile(temporaryQrPath, qrContent, {
-      type: "png",
-      errorCorrectionLevel: "M",
-      margin: 4,
-      width: 600,
-    });
-    await saveQrCopy(config, temporaryQrPath);
-
-    const token = await getFeishuToken(config);
-    const imageKey = await uploadFeishuImage(config, token, temporaryQrPath);
-    const title = getMealTitle(new Date(), config.mealType);
-    await sendFeishuMessage(config, token, "post", {
-      zh_cn: {
-        title,
-        content: [[{ tag: "img", image_key: imageKey }]],
-      },
-    });
-    console.log(`[成功] ${title}已发送到飞书（${config.feishuReceiveIdType}）`);
+    await runQrPipeline(config);
   } catch (error) {
     console.error(`[失败] ${error.message}`);
     await notifyFailure(config, error);
     process.exitCode = 1;
-  } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true });
   }
 }
 

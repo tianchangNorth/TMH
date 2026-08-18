@@ -2,4 +2,4 @@ node_modules/
 .env
 consume-qr.png
 *.log
-
+.runtime/

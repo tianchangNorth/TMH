@@ -1,0 +1,3 @@
+allowBuilds:
+  # protobufjs 的安装脚本不是 SDK 运行所必需，显式禁用以保持可重复安装。
+  protobufjs: false

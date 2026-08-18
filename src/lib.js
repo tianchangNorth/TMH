@@ -32,6 +32,38 @@ export function decodeTmlPayload(rawText) {
   return payload.data;
 }
 
+export function decodeTmlBalancePayload(rawText) {
+  let payload;
+
+  try {
+    payload = JSON.parse(rawText);
+    if (typeof payload === "string") payload = JSON.parse(payload);
+  } catch {
+    throw new Error("TML 余额接口返回的不是有效 JSON");
+  }
+
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("TML 余额接口返回结构异常");
+  }
+
+  if (payload.code !== undefined && !TML_SUCCESS_CODES.has(payload.code)) {
+    const message = typeof payload.message === "string"
+      ? payload.message
+      : typeof payload.msg === "string"
+        ? payload.msg
+        : "未知业务错误";
+    throw new Error(`TML 余额接口业务失败：${message}`);
+  }
+
+  const totalBalance = payload.body?.totalBalance;
+  if ((typeof totalBalance !== "string" && typeof totalBalance !== "number")
+    || !/^-?\d+(?:\.\d+)?$/.test(String(totalBalance))) {
+    throw new Error("TML 余额接口未返回有效的 totalBalance 字段");
+  }
+
+  return String(totalBalance);
+}
+
 export function parsePositiveInteger(value, name) {
   if (!/^\d+$/.test(String(value)) || Number(value) <= 0) {
     throw new Error(`${name} 必须是正整数`);
@@ -71,6 +103,15 @@ export function buildTmlRequestBody(config) {
   };
 }
 
+export function buildTmlBalanceRequestBody(config) {
+  return {
+    loginsession: config.tmlLoginSession,
+    globalAreaId: config.globalAreaId,
+    areaId: config.areaId,
+    parkId: config.parkId,
+  };
+}
+
 export function formatHttpFailure({ label, status, responseText, logId }) {
   const details = [];
 
@@ -95,18 +136,13 @@ export function formatHttpFailure({ label, status, responseText, logId }) {
   return `${label}HTTP ${status}${suffix}`;
 }
 
-export function getMealTitle(date = new Date(), override = "") {
-  if (override) {
-    if (override === "breakfast") return "今日早餐二维码";
-    if (override === "lunch") return "今日午餐二维码";
-    throw new Error("MEAL_TYPE 只能是 breakfast 或 lunch");
-  }
-
-  const hourPart = new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    hour12: false,
+export function getQrTitle(date = new Date(), totalBalance) {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
     timeZone: "Asia/Shanghai",
-  }).formatToParts(date).find((part) => part.type === "hour");
-  const hour = Number(hourPart?.value);
-  return hour < 10 ? "今日早餐二维码" : "今日午餐二维码";
+  }).formatToParts(date);
+  const value = (type) => parts.find((part) => part.type === type)?.value;
+  return `【${value("year")}年${value("month")}月${value("day")}日】通明湖付款码 当前余额：${totalBalance} 元`;
 }

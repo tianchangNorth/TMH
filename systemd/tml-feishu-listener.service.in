@@ -1,14 +1,16 @@
 [Unit]
-Description=Generate and send the daily TML QR code through Feishu
+Description=Listen for Feishu mentions and enqueue TML QR deliveries
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__PROJECT_DIR__/.env
-ExecStart=__NODE_BIN__ __PROJECT_DIR__/src/send-qr.js
-TimeoutStartSec=180
+ExecStart=__NODE_BIN__ __PROJECT_DIR__/src/feishu-listener.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
 UMask=0077
 
 [Install]
