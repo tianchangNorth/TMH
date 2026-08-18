@@ -42,6 +42,7 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
     if (request.url === "/balance") {
       const payload = JSON.parse(body.toString("utf8"));
       assert.deepEqual(payload, {
+        staffId: "test-user",
         loginsession: "test-session",
         globalAreaId: 1,
         areaId: 1,
@@ -49,12 +50,7 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
       });
       assert.equal(request.headers.loginsession, "test-session");
       assert.equal(request.headers.cookie, "loginsession=test-session");
-      response.end(JSON.stringify({
-        code: "200",
-        message: "操作成功",
-        body: { totalBalance: "123.45" },
-        success: true,
-      }));
+      response.end(JSON.stringify(JSON.stringify({ consumptionBalance: "123.45" })));
       return;
     }
 

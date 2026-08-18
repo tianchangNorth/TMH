@@ -26,16 +26,14 @@ test("does not expose a missing QR payload", () => {
 });
 
 test("decodes the total balance from the TML balance response", () => {
-  assert.equal(decodeTmlBalancePayload(JSON.stringify({
-    code: "200",
-    body: { totalBalance: "123.45" },
-  })), "123.45");
+  const wrapped = JSON.stringify(JSON.stringify({ consumptionBalance: "60.0" }));
+  assert.equal(decodeTmlBalancePayload(wrapped), "60.0");
 });
 
-test("rejects a balance response without a numeric totalBalance", () => {
+test("rejects a balance response without a numeric consumptionBalance", () => {
   assert.throws(
-    () => decodeTmlBalancePayload('{"code":"200","body":{}}'),
-    /totalBalance/,
+    () => decodeTmlBalancePayload("{}"),
+    /consumptionBalance/,
   );
 });
 
@@ -59,13 +57,15 @@ test("builds the exact TML request body field names", () => {
   });
 });
 
-test("builds the TML balance request without a userId", () => {
+test("builds the TML consumption balance request with staffId", () => {
   assert.deepEqual(buildTmlBalanceRequestBody({
+    tmlUserId: "staff",
     tmlLoginSession: "session",
     globalAreaId: 1,
     areaId: 2,
     parkId: 3,
   }), {
+    staffId: "staff",
     loginsession: "session",
     globalAreaId: 1,
     areaId: 2,

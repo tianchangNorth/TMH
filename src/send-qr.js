@@ -22,7 +22,7 @@ import {
 } from "./lib.js";
 
 const DEFAULT_TML_API_URL = "https://isp.tml-itcity.com/ipark-mobile/consume/getQRCodeEncrypt";
-const DEFAULT_TML_BALANCE_API_URL = "https://isp.tml-itcity.com/portal/H5/pasc/member/queryBalance";
+const DEFAULT_TML_BALANCE_API_URL = "https://isp.tml-itcity.com/ipark-mobile/bookkeepingRechargebalanceBalance/paginQuery";
 const DEFAULT_TML_ORIGIN = "https://isp.tml-itcity.com";
 const DEFAULT_TML_REFERER = "https://isp.tml-itcity.com/front/miniWallet/";
 const DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781 MiniProgramEnv/Mac";
@@ -182,7 +182,7 @@ async function fetchQrContent(config) {
   }
 }
 
-async function fetchTotalBalance(config) {
+async function fetchCurrentBalance(config) {
   const dispatcher = config.proxyUrl ? new ProxyAgent(config.proxyUrl) : undefined;
   try {
     const rawText = await fetchResponse(config.tmlBalanceApiUrl, {
@@ -367,9 +367,9 @@ export async function runQrPipeline(config, options = {}) {
     temporaryDirectory = await mkdtemp(join(tmpdir(), "tml-qr-"));
     const temporaryQrPath = join(temporaryDirectory, "consume-qr.png");
     console.log("[开始] 获取通明湖付款码和当前余额");
-    const [qrContent, totalBalance] = await Promise.all([
+    const [qrContent, currentBalance] = await Promise.all([
       fetchQrContent(config),
-      fetchTotalBalance(config),
+      fetchCurrentBalance(config),
     ]);
     await QRCode.toFile(temporaryQrPath, qrContent, {
       type: "png",
@@ -381,7 +381,7 @@ export async function runQrPipeline(config, options = {}) {
 
     const token = await getFeishuToken(config);
     const imageKey = await uploadFeishuImage(config, token, temporaryQrPath);
-    const title = getQrTitle(new Date(), totalBalance);
+    const title = getQrTitle(new Date(), currentBalance);
     await sendFeishuMessage(
       config,
       token,

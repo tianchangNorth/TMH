@@ -55,13 +55,13 @@ export function decodeTmlBalancePayload(rawText) {
     throw new Error(`TML 余额接口业务失败：${message}`);
   }
 
-  const totalBalance = payload.body?.totalBalance;
-  if ((typeof totalBalance !== "string" && typeof totalBalance !== "number")
-    || !/^-?\d+(?:\.\d+)?$/.test(String(totalBalance))) {
-    throw new Error("TML 余额接口未返回有效的 totalBalance 字段");
+  const consumptionBalance = payload.consumptionBalance;
+  if ((typeof consumptionBalance !== "string" && typeof consumptionBalance !== "number")
+    || !/^-?\d+(?:\.\d+)?$/.test(String(consumptionBalance))) {
+    throw new Error("TML 余额接口未返回有效的 consumptionBalance 字段");
   }
 
-  return String(totalBalance);
+  return String(consumptionBalance);
 }
 
 export function parsePositiveInteger(value, name) {
@@ -105,6 +105,7 @@ export function buildTmlRequestBody(config) {
 
 export function buildTmlBalanceRequestBody(config) {
   return {
+    staffId: config.tmlUserId,
     loginsession: config.tmlLoginSession,
     globalAreaId: config.globalAreaId,
     areaId: config.areaId,
@@ -136,7 +137,7 @@ export function formatHttpFailure({ label, status, responseText, logId }) {
   return `${label}HTTP ${status}${suffix}`;
 }
 
-export function getQrTitle(date = new Date(), totalBalance) {
+export function getQrTitle(date = new Date(), currentBalance) {
   const parts = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
     month: "numeric",
@@ -144,5 +145,5 @@ export function getQrTitle(date = new Date(), totalBalance) {
     timeZone: "Asia/Shanghai",
   }).formatToParts(date);
   const value = (type) => parts.find((part) => part.type === type)?.value;
-  return `【${value("year")}年${value("month")}月${value("day")}日】通明湖付款码 当前余额：${totalBalance} 元`;
+  return `【${value("year")}年${value("month")}月${value("day")}日】通明湖付款码 当前余额：${currentBalance} 元`;
 }
