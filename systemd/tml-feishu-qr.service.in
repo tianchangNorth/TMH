@@ -1,0 +1,15 @@
+[Unit]
+Description=Generate and send the daily TML QR code through Feishu
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=__PROJECT_DIR__/.env
+ExecStart=__NODE_BIN__ __PROJECT_DIR__/src/send-qr.js
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target
+

@@ -1,0 +1,21 @@
+{
+  "name": "tml-feishu-qr-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.0.8",
+  "description": "Fetch a TML consumption QR code and deliver it through a Feishu app bot.",
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "scripts": {
+    "check": "node --check src/send-qr.js && node --check src/lib.js",
+    "config:check": "node src/send-qr.js --check-config",
+    "send": "node src/send-qr.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "undici": "^7.28.0"
+  }
+}
