@@ -32,7 +32,8 @@ install -m 0644 \
   "${unit_dir}/tml-feishu-qr.timer"
 
 systemctl --user daemon-reload
-systemctl --user enable --now tml-feishu-qr.timer
+systemctl --user enable tml-feishu-qr.timer
+systemctl --user restart tml-feishu-qr.timer
 
-echo "已启用每日 08:30（Asia/Shanghai）定时任务。"
+echo "已启用每日 08:30 和 11:30（Asia/Shanghai）定时任务。"
 systemctl --user list-timers tml-feishu-qr.timer --no-pager

@@ -94,3 +94,19 @@ export function formatHttpFailure({ label, status, responseText, logId }) {
   const suffix = details.length > 0 ? `（${details.join(", ")}）` : "";
   return `${label}HTTP ${status}${suffix}`;
 }
+
+export function getMealTitle(date = new Date(), override = "") {
+  if (override) {
+    if (override === "breakfast") return "今日早餐二维码";
+    if (override === "lunch") return "今日午餐二维码";
+    throw new Error("MEAL_TYPE 只能是 breakfast 或 lunch");
+  }
+
+  const hourPart = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Shanghai",
+  }).formatToParts(date).find((part) => part.type === "hour");
+  const hour = Number(hourPart?.value);
+  return hour < 10 ? "今日早餐二维码" : "今日午餐二维码";
+}

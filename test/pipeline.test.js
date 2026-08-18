@@ -59,8 +59,13 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
       assert.equal(request.headers.authorization, "Bearer test-token");
       const payload = JSON.parse(body.toString("utf8"));
       assert.equal(payload.receive_id, "test-open-id");
-      assert.equal(payload.msg_type, "image");
-      assert.deepEqual(JSON.parse(payload.content), { image_key: "test-image-key" });
+      assert.equal(payload.msg_type, "post");
+      assert.deepEqual(JSON.parse(payload.content), {
+        zh_cn: {
+          title: "今日早餐二维码",
+          content: [[{ tag: "img", image_key: "test-image-key" }]],
+        },
+      });
       assert.match(payload.uuid, /^[0-9a-f-]{36}$/);
       response.end(JSON.stringify({ code: 0, data: { message_id: "test-message" } }));
       return;
@@ -90,6 +95,7 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
       FEISHU_RECEIVE_ID_TYPE: "open_id",
       FEISHU_FAILURE_NOTIFICATION: "false",
       KEEP_QR: "false",
+      MEAL_TYPE: "breakfast",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -101,7 +107,6 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
 
   const [exitCode] = await once(child, "exit");
   assert.equal(exitCode, 0, stderr);
-  assert.match(stdout, /二维码已发送到飞书/);
+  assert.match(stdout, /今日早餐二维码已发送到飞书/);
   assert.equal(calls.length, 4);
 });
-

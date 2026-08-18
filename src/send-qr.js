@@ -11,6 +11,7 @@ import {
   buildTmlRequestBody,
   decodeTmlPayload,
   formatHttpFailure,
+  getMealTitle,
   parseBoolean,
   parsePositiveInteger,
   requireEnvironment,
@@ -103,6 +104,7 @@ function loadConfig() {
     failureNotification: parseBoolean(process.env.FEISHU_FAILURE_NOTIFICATION || "true", "FEISHU_FAILURE_NOTIFICATION"),
     keepQr: parseBoolean(process.env.KEEP_QR || "false", "KEEP_QR"),
     qrOutputPath: process.env.QR_OUTPUT_PATH || "consume-qr.png",
+    mealType: process.env.MEAL_TYPE?.trim() || "",
   };
 }
 
@@ -284,8 +286,14 @@ async function main() {
 
     const token = await getFeishuToken(config);
     const imageKey = await uploadFeishuImage(config, token, temporaryQrPath);
-    await sendFeishuMessage(config, token, "image", { image_key: imageKey });
-    console.log(`[成功] 二维码已发送到飞书（${config.feishuReceiveIdType}）`);
+    const title = getMealTitle(new Date(), config.mealType);
+    await sendFeishuMessage(config, token, "post", {
+      zh_cn: {
+        title,
+        content: [[{ tag: "img", image_key: imageKey }]],
+      },
+    });
+    console.log(`[成功] ${title}已发送到飞书（${config.feishuReceiveIdType}）`);
   } catch (error) {
     console.error(`[失败] ${error.message}`);
     await notifyFailure(config, error);

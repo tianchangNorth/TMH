@@ -1,8 +1,9 @@
 [Unit]
-Description=Run the TML Feishu QR pipeline every day at 08:30 Asia/Shanghai
+Description=Run the TML Feishu QR pipeline every day at 08:30 and 11:30 Asia/Shanghai
 
 [Timer]
 OnCalendar=*-*-* 08:30:00 Asia/Shanghai
+OnCalendar=*-*-* 11:30:00 Asia/Shanghai
 Persistent=true
 AccuracySec=1min
 RandomizedDelaySec=0
@@ -10,4 +11,3 @@ Unit=tml-feishu-qr.service
 
 [Install]
 WantedBy=timers.target
-

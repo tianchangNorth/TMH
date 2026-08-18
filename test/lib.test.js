@@ -5,6 +5,7 @@ import {
   buildTmlRequestBody,
   decodeTmlPayload,
   formatHttpFailure,
+  getMealTitle,
   parseBoolean,
   validateReceiveIdType,
 } from "../src/lib.js";
@@ -61,4 +62,11 @@ test("formats safe Feishu HTTP diagnostics without dumping arbitrary bodies", ()
     responseText: "raw-sensitive-body",
     logId: null,
   }), "TML 二维码接口HTTP 500");
+});
+
+test("selects the meal title using Asia/Shanghai time", () => {
+  assert.equal(getMealTitle(new Date("2026-08-18T00:30:00Z")), "今日早餐二维码");
+  assert.equal(getMealTitle(new Date("2026-08-18T03:30:00Z")), "今日午餐二维码");
+  assert.equal(getMealTitle(new Date(), "breakfast"), "今日早餐二维码");
+  assert.equal(getMealTitle(new Date(), "lunch"), "今日午餐二维码");
 });
