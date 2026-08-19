@@ -134,7 +134,7 @@ sudo loginctl enable-linger "$USER"
 
 如果不想部署飞书自建应用、定时任务和长连接监听，只想在对话中让 AI Agent 按需取码，本仓库提供了 `skills/tml-qr/` 这个通用 Skill（兼容 Claude Code、Hermes、Codex、Cursor 等支持 Skill 的 Agent）。
 
-它复用同一套 TML 接口，但只保留「取码 + 生成 PNG」两步，不依赖飞书机器人。Agent 识别到「输出二维码 / 付款码」后，运行内置脚本并把生成的 PNG 发给用户。
+它复用同一套 TML 接口，但只保留「取码 + 生成 PNG」两步，不依赖飞书机器人。Agent 识别到「输出通明湖二维码 / 通明湖付款码」后，运行内置脚本并把生成的 PNG 发给用户。
 
 ### 5.1 安装
 
@@ -146,24 +146,35 @@ ln -s "$(pwd)/skills/tml-qr" ~/.claude/skills/tml-qr
 
 （Hermes 为 `~/.hermes/skills/tml-qr`，其他 Agent 依其 skills 目录约定而定。）依赖 `qrcode` 已包含在本仓库根 `package.json` 中，在仓库根执行过 `pnpm install` 即可。
 
-### 5.2 配置凭证
+### 5.2 配置凭证（多账号）
 
-创建 `skills/tml-qr/.env`（权限 600），只需填写两个字段，无需飞书相关变量：
+凭证存于 `skills/tml-qr/users.json`（权限 600，已被 `.gitignore` 忽略），按手机号索引、每账号带昵称，登录成功后由登录脚本写入：
 
-```dotenv
-TML_USER_ID=<userId>
-TML_LOGIN_SESSION=<loginsession>
+```json
+{
+  "default": "13800000000",
+  "users": {
+    "13800000000": {
+      "nickname": "小王",
+      "userId": "55053fa...",
+      "loginsession": "06c15978..."
+    }
+  }
+}
 ```
 
-脚本默认读取 skill 目录下的 `.env`，也可用环境变量 `TML_ENV_FILE` 指定其他路径。会话过期后只需更新 `TML_LOGIN_SESSION`。
+`loginsession` 是登录会话，过期后重新登录即可更新。`users.json` 不存在时会回退读取旧版单账号 `.env`（`TML_USER_ID` + `TML_LOGIN_SESSION`）作为默认账号。
 
-### 5.3 验证
+### 5.3 取码与账号管理
 
 ```bash
-node skills/tml-qr/scripts/fetch-tml-qr.mjs
+node skills/tml-qr/scripts/fetch-tml-qr.mjs --user 手机号或昵称         # 取码（不带 --user 用默认账号）
+node skills/tml-qr/scripts/tml-users.mjs list                          # 列出账号
+node skills/tml-qr/scripts/tml-users.mjs remove --user 手机号或昵称     # 删除账号
+node skills/tml-qr/scripts/tml-users.mjs set-default --user 手机号或昵称 # 设默认账号
 ```
 
-成功时输出一行 JSON：`{"qrPath":"...","personalBalance":"12.00","bookkeepingBalance":"45.00"}`，其中个人充值与记账充值分别来自不同接口，单位已换算为元。Agent 据此把 PNG 发给用户即可。
+取码成功时输出一行 JSON：`{"qrPath":"...","phone":"138...","nickname":"小王","personalBalance":"12.00","bookkeepingBalance":"45.00"}`，个人充值与记账充值分别来自不同接口、单位已换算为元。Agent 据此把 PNG 发给用户即可。
 
 具体的触发词、输出字段和降级行为，见 `skills/tml-qr/SKILL.md`。
 

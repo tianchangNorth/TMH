@@ -1,12 +1,12 @@
-import { chmod, mkdir, readFile } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import QRCode from "qrcode";
+import { loadStore, parseArgv, resolveUser } from "./tml-store.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SKILL_DIR = resolve(SCRIPT_DIR, "..");
-const DEFAULT_ENV_FILE = resolve(SKILL_DIR, ".env");
 const DEFAULT_OUTPUT = resolve(SKILL_DIR, "output", "consume-qr.png");
 
 const API = {
@@ -19,45 +19,7 @@ const API = {
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781 MiniProgramEnv/Mac",
 };
 
-function parseDotEnv(text) {
-  const env = {};
-  for (const [i, line] of text.split(/\r?\n/).entries()) {
-    const t = line.trim();
-    if (!t || t.startsWith("#")) continue;
-    const eq = t.indexOf("=");
-    if (eq < 1) throw new Error(`.env 第 ${i + 1} 行格式错误`);
-    const key = t.slice(0, eq).trim();
-    let value = t.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    env[key] = value;
-  }
-  return env;
-}
-
-async function loadEnv() {
-  const envFile = process.env.TML_ENV_FILE || DEFAULT_ENV_FILE;
-  let raw;
-  try {
-    raw = await readFile(envFile, "utf8");
-  } catch (e) {
-    if (e.code === "ENOENT") {
-      throw new Error(`未找到凭证文件 ${envFile}，请先创建并填写 TML_LOGIN_SESSION`);
-    }
-    throw e;
-  }
-  const env = parseDotEnv(raw);
-  for (const name of ["TML_USER_ID", "TML_LOGIN_SESSION"]) {
-    if (!env[name]) throw new Error(`凭证文件缺少 ${name}`);
-  }
-  return env;
-}
-
-async function post(url, cfg, body, label) {
+async function post(url, user, body, label) {
   let res;
   try {
     res = await fetch(url, {
@@ -66,14 +28,14 @@ async function post(url, cfg, body, label) {
         accept: "application/json, text/plain, */*",
         "accept-language": "zh-CN,zh;q=0.9",
         "content-type": "application/json;charset=UTF-8",
-        cookie: `loginsession=${cfg.TML_LOGIN_SESSION}`,
-        loginsession: cfg.TML_LOGIN_SESSION,
+        cookie: `loginsession=${user.loginsession}`,
+        loginsession: user.loginsession,
         origin: API.origin,
         referer: API.referer,
         "user-agent": API.userAgent,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(Number(cfg.TML_REQUEST_TIMEOUT_MS || 20000)),
+      signal: AbortSignal.timeout(20000),
     });
   } catch (e) {
     throw new Error(`${label}网络请求失败：${e.name === "TimeoutError" ? "超时" : e.message}`);
@@ -111,14 +73,16 @@ function yuanFromYuan(value) {
 }
 
 async function main() {
-  const cfg = await loadEnv();
-  const gid = Number(cfg.TML_GLOBAL_AREA_ID || 1);
-  const aid = Number(cfg.TML_AREA_ID || 1);
-  const pid = Number(cfg.TML_PARK_ID || 1);
+  const args = parseArgv(process.argv.slice(2));
+  const store = await loadStore();
+  const user = resolveUser(store, args.user);
+  const gid = Number(user.globalAreaId || 1);
+  const aid = Number(user.areaId || 1);
+  const pid = Number(user.parkId || 1);
 
-  const qrPayload = await post(API.qr, cfg, {
-    userId: cfg.TML_USER_ID,
-    loginsession: cfg.TML_LOGIN_SESSION,
+  const qrPayload = await post(API.qr, user, {
+    userId: user.userId,
+    loginsession: user.loginsession,
     globalAreaId: gid,
     areaId: aid,
     parkId: pid,
@@ -131,8 +95,8 @@ async function main() {
 
   let personalBalance = null;
   try {
-    const balPayload = await post(API.balance, cfg, {
-      loginsession: cfg.TML_LOGIN_SESSION,
+    const balPayload = await post(API.balance, user, {
+      loginsession: user.loginsession,
       globalAreaId: gid,
       areaId: aid,
       parkId: pid,
@@ -144,19 +108,19 @@ async function main() {
 
   let bookkeepingBalance = null;
   try {
-    const bkPayload = await post(API.bookkeepingBalance, cfg, {
-      staffId: cfg.TML_USER_ID,
+    const bkPayload = await post(API.bookkeepingBalance, user, {
+      staffId: user.userId,
       globalAreaId: gid,
       areaId: aid,
       parkId: pid,
-      loginsession: cfg.TML_LOGIN_SESSION,
+      loginsession: user.loginsession,
     }, "记账余额接口");
     bookkeepingBalance = yuanFromYuan(bkPayload?.consumptionBalance);
   } catch {
     bookkeepingBalance = null;
   }
 
-  const outPath = process.env.TML_QR_OUTPUT || DEFAULT_OUTPUT;
+  const outPath = args.out || process.env.TML_QR_OUTPUT || DEFAULT_OUTPUT;
   await mkdir(dirname(outPath), { recursive: true });
   await QRCode.toFile(outPath, qrContent, {
     type: "png",
@@ -166,7 +130,13 @@ async function main() {
   });
   await chmod(outPath, 0o600).catch(() => {});
 
-  console.log(JSON.stringify({ qrPath: outPath, personalBalance, bookkeepingBalance }));
+  console.log(JSON.stringify({
+    qrPath: outPath,
+    phone: user.phone,
+    nickname: user.nickname,
+    personalBalance,
+    bookkeepingBalance,
+  }));
 }
 
 main().catch((e) => {
