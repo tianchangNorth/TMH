@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { dirname, resolve } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { getQrTitle } from "../src/lib.js";
+import { runQrPipeline } from "../src/send-qr.js";
 
 const projectDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -128,4 +131,111 @@ test("runs the complete TML to Feishu image pipeline against local APIs", async 
   assert.match(stdout, /通明湖付款码已发送到飞书/);
   assert.doesNotMatch(stdout, /123\.45/);
   assert.equal(calls.length, 5);
+});
+
+test("runQrPipeline with accountPhone uses that account and does not change default", async (context) => {
+  const dir = await mkdtemp(join(tmpdir(), "tml-acct-"));
+  context.after(() => rm(dir, { recursive: true, force: true }));
+
+  const usersFile = join(dir, "users.json");
+  await writeFile(usersFile, JSON.stringify({
+    default: "13800000000",
+    users: {
+      "13800000000": {
+        nickname: "13800000000",
+        userId: "default-user",
+        loginsession: "default-session",
+        globalAreaId: 1, areaId: 1, parkId: 1,
+      },
+      "13900000000": {
+        nickname: "13900000000",
+        userId: "other-user",
+        loginsession: "other-session",
+        globalAreaId: 1, areaId: 1, parkId: 1,
+      },
+    },
+  }));
+
+  const seen = {};
+  const server = createServer(async (request, response) => {
+    const body = await readRequestBody(request);
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/tml") {
+      seen.qr = JSON.parse(body.toString("utf8"));
+      response.end(JSON.stringify(JSON.stringify({ code: 200, data: "qr-payload" })));
+      return;
+    }
+    if (request.url === "/balance") {
+      seen.balance = JSON.parse(body.toString("utf8"));
+      response.end(JSON.stringify(JSON.stringify({ consumptionBalance: "50.0" })));
+      return;
+    }
+    if (request.url === "/open-apis/auth/v3/tenant_access_token/internal") {
+      response.end(JSON.stringify({ code: 0, tenant_access_token: "tkn" }));
+      return;
+    }
+    if (request.url === "/open-apis/im/v1/images") {
+      response.end(JSON.stringify({ code: 0, data: { image_key: "img-key" } }));
+      return;
+    }
+    if (request.url?.startsWith("/open-apis/im/v1/messages?")) {
+      response.end(JSON.stringify({ code: 0, data: { message_id: "om-out" } }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end("{}");
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  context.after(() => server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const prevUsersFile = process.env.TML_USERS_FILE;
+  process.env.TML_USERS_FILE = usersFile;
+  try {
+    const config = {
+      tmlApiUrl: `${baseUrl}/tml`,
+      tmlBalanceApiUrl: `${baseUrl}/balance`,
+      tmlOrigin: baseUrl,
+      tmlReferer: `${baseUrl}/front/miniWallet/`,
+      tmlUserAgent: "ua",
+      proxyUrl: null,
+      timeoutMs: 20000,
+      feishuAppId: "cli_0123456789abcdef",
+      feishuAppSecret: "secret",
+      feishuApiBase: `${baseUrl}/open-apis`,
+      feishuReceiveId: "oc-chat-1",
+      feishuReceiveIdType: "chat_id",
+      failureNotification: false,
+      keepQr: false,
+      qrOutputPath: join(dir, "out.png"),
+      sendLockPath: join(dir, "send.lock"),
+      sendLockTimeoutMs: 75000,
+      sendLockStaleMs: 180000,
+      // 默认账号凭证（应被 accountPhone 覆盖）
+      tmlUserId: "default-user",
+      tmlLoginSession: "default-session",
+      globalAreaId: 1, areaId: 1, parkId: 1,
+    };
+
+    await runQrPipeline(config, {
+      receiveId: "oc-chat-1",
+      receiveIdType: "chat_id",
+      messageUuid: "11111111-2222-3333-4444-555555555555",
+      accountPhone: "13900000000",
+    });
+
+    // TML 取码与余额接口都用的是指定账号的凭证，而非默认账号
+    assert.equal(seen.qr.userId, "other-user");
+    assert.equal(seen.qr.loginsession, "other-session");
+    assert.equal(seen.balance.staffId, "other-user");
+    assert.equal(seen.balance.loginsession, "other-session");
+
+    // 默认账号未被改动
+    const after = JSON.parse(await (await import("node:fs/promises")).readFile(usersFile, "utf8"));
+    assert.equal(after.default, "13800000000");
+  } finally {
+    if (prevUsersFile === undefined) delete process.env.TML_USERS_FILE;
+    else process.env.TML_USERS_FILE = prevUsersFile;
+  }
 });

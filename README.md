@@ -27,16 +27,16 @@ chmod 600 .env
 
 项目已经生成空白 `.env`；如果它被删除，可用 `cp .env.example .env` 重新创建。
 
-编辑 `.env`，至少填写：
+编辑 `.env`，至少填写飞书应用信息：
 
 ```dotenv
-TML_USER_ID=...
-TML_LOGIN_SESSION=...
 FEISHU_APP_ID=cli_...
 FEISHU_APP_SECRET=...
 FEISHU_RECEIVE_ID=ou_...
 FEISHU_RECEIVE_ID_TYPE=open_id
 ```
+
+`TML_USER_ID`/`TML_LOGIN_SESSION` 现为**可选**：留空时由 `users.json` 的默认账号提供凭证（推荐经飞书「登录」自助获取，见第 6 节）。填写则优先使用，向后兼容旧抓包配置。
 
 即时触发默认沿用定时收件人作为白名单：
 
@@ -56,9 +56,11 @@ FEISHU_TRIGGER_SENDER_IDS=ou_xxx,ou_yyy
 @机器人
 @机器人 二维码
 @机器人 重发二维码
+@机器人 二维码 15812345678          # 用指定账号取码（不改默认账号）
+@机器人 重发二维码 15812345678       # 同上
 ```
 
-不要提交 `.env`。登录会话过期后，只需要更新 `TML_LOGIN_SESSION`，无需修改代码。
+不要提交 `.env`。登录会话过期后，在飞书里重新发送「@机器人 登录 手机号」即可刷新（见第 6 节），无需改 `.env`；若仍用旧抓包方式，则更新 `TML_LOGIN_SESSION`。
 
 填写后先执行只读配置校验（不会发起网络请求）：
 
@@ -177,6 +179,37 @@ node skills/tml-qr/scripts/tml-users.mjs set-default --user 手机号或昵称 #
 取码成功时输出一行 JSON：`{"qrPath":"...","phone":"138...","nickname":"小王","personalBalance":"12.00","bookkeepingBalance":"45.00"}`，个人充值与记账充值分别来自不同接口、单位已换算为元。Agent 据此把 PNG 发给用户即可。
 
 具体的触发词、输出字段和降级行为，见 `skills/tml-qr/SKILL.md`。
+
+## 6. 飞书内登录与账号管理
+
+凭证不再需要手动抓包。监听服务启动后（即使尚未配置任何账号），在私聊或授权群聊里直接与机器人对话即可完成登录、验证和账号管理：
+
+```text
+@机器人 登录 15812345678          # 发送短信验证码，建立 60 秒登录会话
+@机器人 验证码 123456             # 用收到的 6 位验证码登录，自动写入 users.json 并设为默认
+@机器人 123456                    # 也可直接回复 6 位数字作为验证码（需有进行中会话）
+@机器人 取消登录                   # 放弃当前登录会话
+@机器人 账号                       # 列出已登录账号（脱敏手机号 + 昵称，★ 标记默认）
+@机器人 切换 15812345678           # 切换默认账号（可用手机号或昵称）
+@机器人 帮助                       # 查看机器人支持的全部命令（也可发「功能」/「功能介绍」）
+```
+
+登录成功后，定时任务（08:30/11:30）与即时触发（`@机器人 二维码`）会自动使用默认账号取码，无需修改 `.env`。凭证过期重登即可。登录/验证/账号管理命令**不会**进入二维码发送队列、不触发冷却与去重，与取码流程完全隔离。
+
+相关配置（默认值见 `.env.example`）：
+
+- `FEISHU_LOGIN_INTERACTION_ENABLED=true`：总开关，关闭后机器人不再响应登录类命令。
+- `FEISHU_LOGIN_BARE_CODE_ENABLED=true`：是否允许直接回复 6 位数字作为验证码。
+- `FEISHU_LOGIN_SESSION_TTL_MS=60000`：登录会话有效期，超时需重新发码。
+
+CLI 仍可管理账号（`node src/tml-users.mjs list/remove/set-default/add`、`node src/tml-auth.mjs send-code/login`），与飞书内操作写同一个 `users.json`。
+
+注意事项：
+
+- 登录命令仅授权发送者（`FEISHU_TRIGGER_SENDER_IDS`）或授权群聊（`FEISHU_TRIGGER_CHAT_IDS`）可发起；未授权静默拒绝。
+- 回复中手机号一律脱敏；但发起者在群聊里输入的明文手机号会留在群历史，如需保密请私聊机器人。
+- 短信登录命令走直连（不走 `TML_HTTP_PROXY`）。需代理网络的部署请用 CLI 或后续扩展。
+- 从旧 `.env` 抓包方式迁移到 `users.json`：清空 `.env` 里的 `TML_USER_ID`/`TML_LOGIN_SESSION` 即可让程序改读 `users.json` 默认账号；两者共存时 `.env` 优先。
 
 ## 安全说明
 

@@ -73,6 +73,31 @@ test("accepts a bare mention and rejects unrelated text", () => {
   assert.equal(parseTriggerEvent(unrelated, config).reason, "unsupported_command");
 });
 
+test("qr command with a phone suffix targets a specific account without changing default", () => {
+  const config = loadTriggerConfig(baseConfig(), {});
+  const msg = (text) => groupMessage({
+    message: { ...groupMessage().message, content: JSON.stringify({ text }) },
+  });
+
+  const byPhone = parseTriggerEvent(msg("@_user_1 二维码 13800000000"), config);
+  assert.equal(byPhone.accepted, true);
+  assert.equal(byPhone.job.accountPhone, "13800000000");
+
+  const resendByPhone = parseTriggerEvent(msg("@_user_1 重发二维码 13800000000"), config);
+  assert.equal(resendByPhone.accepted, true);
+  assert.equal(resendByPhone.job.accountPhone, "13800000000");
+
+  // 不带手机号时 accountPhone 为 null（走默认账号）
+  const plain = parseTriggerEvent(msg("@_user_1 二维码"), config);
+  assert.equal(plain.accepted, true);
+  assert.equal(plain.job.accountPhone, null);
+
+  // 非手机号后缀不匹配，按未支持命令处理
+  const bad = parseTriggerEvent(msg("@_user_1 二维码 小王"), config);
+  assert.equal(bad.accepted, false);
+  assert.equal(bad.reason, "unsupported_command");
+});
+
 test("rejects an unauthorized sender and a group message without a mention", () => {
   const config = loadTriggerConfig(baseConfig(), {});
   const unauthorized = groupMessage({

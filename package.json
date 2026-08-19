@@ -9,7 +9,7 @@
     "node": ">=20.18.1"
   },
   "scripts": {
-    "check": "node --check src/send-qr.js && node --check src/feishu-trigger.js && node --check src/feishu-listener.js && node --check src/lib.js",
+    "check": "node --check src/send-qr.js && node --check src/feishu-trigger.js && node --check src/feishu-listener.js && node --check src/lib.js && node --check src/store.mjs && node --check src/tml-auth.mjs && node --check src/tml-users.mjs && node --check src/login-sessions.mjs",
     "config:check": "node src/send-qr.js --check-config",
     "listen": "node src/feishu-listener.js",
     "listen:check": "node src/feishu-listener.js --check-config",

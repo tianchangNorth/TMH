@@ -20,6 +20,7 @@ import {
   requireEnvironment,
   validateReceiveIdType,
 } from "./lib.js";
+import { loadStore, maskPhone, resolveUser } from "./store.mjs";
 
 const DEFAULT_TML_API_URL = "https://isp.tml-itcity.com/ipark-mobile/consume/getQRCodeEncrypt";
 const DEFAULT_TML_BALANCE_API_URL = "https://isp.tml-itcity.com/ipark-mobile/bookkeepingRechargebalanceBalance/paginQuery";
@@ -79,10 +80,8 @@ export async function loadDotEnv() {
   }
 }
 
-export function loadConfig() {
+export function loadFeishuConfig() {
   requireEnvironment(process.env, [
-    "TML_USER_ID",
-    "TML_LOGIN_SESSION",
     "FEISHU_APP_ID",
     "FEISHU_APP_SECRET",
     "FEISHU_RECEIVE_ID",
@@ -94,11 +93,6 @@ export function loadConfig() {
     tmlOrigin: process.env.TML_ORIGIN || DEFAULT_TML_ORIGIN,
     tmlReferer: process.env.TML_REFERER || DEFAULT_TML_REFERER,
     tmlUserAgent: process.env.TML_USER_AGENT || DEFAULT_USER_AGENT,
-    tmlUserId: process.env.TML_USER_ID,
-    tmlLoginSession: process.env.TML_LOGIN_SESSION,
-    globalAreaId: parsePositiveInteger(process.env.TML_GLOBAL_AREA_ID || "1", "TML_GLOBAL_AREA_ID"),
-    areaId: parsePositiveInteger(process.env.TML_AREA_ID || "1", "TML_AREA_ID"),
-    parkId: parsePositiveInteger(process.env.TML_PARK_ID || "1", "TML_PARK_ID"),
     proxyUrl: process.env.TML_HTTP_PROXY?.trim() || null,
     timeoutMs: parsePositiveInteger(process.env.REQUEST_TIMEOUT_MS || "20000", "REQUEST_TIMEOUT_MS"),
     feishuAppId: process.env.FEISHU_APP_ID,
@@ -113,6 +107,48 @@ export function loadConfig() {
     sendLockTimeoutMs: parsePositiveInteger(process.env.QR_SEND_LOCK_TIMEOUT_MS || "75000", "QR_SEND_LOCK_TIMEOUT_MS"),
     sendLockStaleMs: parsePositiveInteger(process.env.QR_SEND_LOCK_STALE_MS || "180000", "QR_SEND_LOCK_STALE_MS"),
   };
+}
+
+// 优先用 .env 的 TML_USER_ID/TML_LOGIN_SESSION（向后兼容 systemd EnvironmentFile 与现有测试）；
+// 缺失时从 users.json 的默认账号读取。两者都缺则抛错，提示先登录。
+export async function loadAccountConfig() {
+  const envUserId = process.env.TML_USER_ID?.trim();
+  const envSession = process.env.TML_LOGIN_SESSION?.trim();
+  if (envUserId && envSession) {
+    return {
+      tmlUserId: envUserId,
+      tmlLoginSession: envSession,
+      globalAreaId: parsePositiveInteger(process.env.TML_GLOBAL_AREA_ID || "1", "TML_GLOBAL_AREA_ID"),
+      areaId: parsePositiveInteger(process.env.TML_AREA_ID || "1", "TML_AREA_ID"),
+      parkId: parsePositiveInteger(process.env.TML_PARK_ID || "1", "TML_PARK_ID"),
+      source: "env",
+      defaultPhoneMasked: null,
+    };
+  }
+
+  const store = await loadStore();
+  const user = resolveUser(store);
+  return {
+    tmlUserId: String(user.userId),
+    tmlLoginSession: user.loginsession,
+    globalAreaId: Number(user.globalAreaId || 1),
+    areaId: Number(user.areaId || 1),
+    parkId: Number(user.parkId || 1),
+    source: "store",
+    defaultPhoneMasked: maskPhone(user.phone),
+  };
+}
+
+export async function loadFullConfig() {
+  await loadDotEnv();
+  const base = loadFeishuConfig();
+  const acct = await loadAccountConfig();
+  return { ...base, ...acct };
+}
+
+// 仅保留向后兼容：不带 TML 凭证时仍可加载飞书部分（用于只校验飞书配置的场景）。
+export function loadConfig() {
+  return loadFeishuConfig();
 }
 
 async function fetchResponse(url, options, label, timeoutMs) {
@@ -207,7 +243,7 @@ async function fetchCurrentBalance(config) {
   }
 }
 
-async function getFeishuToken(config) {
+export async function getFeishuToken(config) {
   const rawText = await fetchResponse(`${config.feishuApiBase}/auth/v3/tenant_access_token/internal`, {
     method: "POST",
     headers: { "content-type": "application/json; charset=utf-8" },
@@ -243,7 +279,7 @@ async function uploadFeishuImage(config, token, imagePath) {
   return payload.data.image_key;
 }
 
-async function sendFeishuMessage(
+export async function sendFeishuMessage(
   config,
   token,
   msgType,
@@ -354,11 +390,35 @@ async function acquireSendLock(config) {
   }
 }
 
+// 按手机号临时解析某账号凭证（不改默认账号）。找不到时由 resolveUser 抛错。
+async function resolveAccountOverride(phone) {
+  const store = await loadStore();
+  const user = resolveUser(store, phone);
+  return {
+    tmlUserId: String(user.userId),
+    tmlLoginSession: user.loginsession,
+    globalAreaId: Number(user.globalAreaId || 1),
+    areaId: Number(user.areaId || 1),
+    parkId: Number(user.parkId || 1),
+    accountPhoneMasked: maskPhone(user.phone),
+  };
+}
+
 export async function runQrPipeline(config, options = {}) {
   const destination = {
     receiveId: options.receiveId || config.feishuReceiveId,
     receiveIdType: options.receiveIdType || config.feishuReceiveIdType,
   };
+
+  // 指定账号时临时加载该账号凭证用于 TML 取码，不写回 store.default；
+  // 飞书凭证与发送锁仍用基础 config。
+  let tmlConfig = config;
+  if (options.accountPhone) {
+    const acct = await resolveAccountOverride(options.accountPhone);
+    tmlConfig = { ...config, ...acct };
+    console.log(`[账号] 使用指定账号取码：${acct.accountPhoneMasked}`);
+  }
+
   const releaseLock = await acquireSendLock(config);
 
   let temporaryDirectory;
@@ -368,8 +428,8 @@ export async function runQrPipeline(config, options = {}) {
     const temporaryQrPath = join(temporaryDirectory, "consume-qr.png");
     console.log("[开始] 获取通明湖付款码和当前余额");
     const [qrContent, currentBalance] = await Promise.all([
-      fetchQrContent(config),
-      fetchCurrentBalance(config),
+      fetchQrContent(tmlConfig),
+      fetchCurrentBalance(tmlConfig),
     ]);
     await QRCode.toFile(temporaryQrPath, qrContent, {
       type: "png",
@@ -405,19 +465,31 @@ export async function runQrPipeline(config, options = {}) {
 }
 
 async function main() {
-  await loadDotEnv();
-  const config = loadConfig();
-
   if (process.argv.includes("--check-config")) {
-    console.log(`[成功] 环境变量配置有效（接收人类型：${config.feishuReceiveIdType}）`);
+    await loadDotEnv();
+    const base = loadFeishuConfig();
+    let acct;
+    try {
+      acct = await loadAccountConfig();
+    } catch (error) {
+      console.log(`[失败] ${error.message}（请先执行登录流程，或在 .env 填写 TML_USER_ID/TML_LOGIN_SESSION）`);
+      process.exitCode = 1;
+      return;
+    }
+    const sourceDesc = acct.source === "env"
+      ? "来源：.env"
+      : `来源：users.json 默认账号 ${acct.defaultPhoneMasked ?? ""}`.trim();
+    console.log(`[成功] 环境变量配置有效（接收人类型：${base.feishuReceiveIdType}，凭证${sourceDesc}）`);
     return;
   }
 
+  let config;
   try {
+    config = await loadFullConfig();
     await runQrPipeline(config);
   } catch (error) {
     console.error(`[失败] ${error.message}`);
-    await notifyFailure(config, error);
+    if (config) await notifyFailure(config, error);
     process.exitCode = 1;
   }
 }

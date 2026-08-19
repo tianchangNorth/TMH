@@ -79,7 +79,32 @@ export function loadTriggerConfig(baseConfig, environment = process.env) {
       environment.FEISHU_TRIGGER_HISTORY_RETENTION_MS || "604800000",
       "FEISHU_TRIGGER_HISTORY_RETENTION_MS",
     ),
+    loginInteractionEnabled: parseBoolean(
+      environment.FEISHU_LOGIN_INTERACTION_ENABLED || "true",
+      "FEISHU_LOGIN_INTERACTION_ENABLED",
+    ),
+    loginBareCodeEnabled: parseBoolean(
+      environment.FEISHU_LOGIN_BARE_CODE_ENABLED || "true",
+      "FEISHU_LOGIN_BARE_CODE_ENABLED",
+    ),
+    loginSessionTtlMs: parsePositiveInteger(
+      environment.FEISHU_LOGIN_SESSION_TTL_MS || "60000",
+      "FEISHU_LOGIN_SESSION_TTL_MS",
+    ),
   };
+}
+
+// 匹配二维码触发命令。支持「二维码」「重发二维码」等已配置命令，以及
+// 「二维码 <手机号>」取指定账号的码（不改默认）。返回 {matched, phone}。
+function matchQrCommand(command, triggerConfig) {
+  for (const cmd of triggerConfig.commands) {
+    if (command === cmd) return { matched: true, phone: null };
+    if (command.startsWith(cmd)) {
+      const m = command.slice(cmd.length).match(/^\s+(1\d{10})$/);
+      if (m) return { matched: true, phone: m[1] };
+    }
+  }
+  return { matched: false, phone: null };
 }
 
 export function parseTriggerEvent(data, triggerConfig) {
@@ -98,8 +123,17 @@ export function parseTriggerEvent(data, triggerConfig) {
   }
 
   const command = commandWithoutMentions(message, text);
-  const commandAccepted = (command === "" && triggerConfig.allowBareMention)
-    || triggerConfig.commands.has(command);
+  let accountPhone = null;
+  let commandAccepted = false;
+  if (command === "" && triggerConfig.allowBareMention) {
+    commandAccepted = true;
+  } else {
+    const m = matchQrCommand(command, triggerConfig);
+    if (m.matched) {
+      commandAccepted = true;
+      accountPhone = m.phone;
+    }
+  }
   if (!commandAccepted) return { accepted: false, reason: "unsupported_command" };
 
   const ids = senderIds(sender);
@@ -113,6 +147,7 @@ export function parseTriggerEvent(data, triggerConfig) {
       id: message.message_id,
       messageUuid: randomUUID(),
       chatId: message.chat_id,
+      accountPhone: accountPhone ?? null,
       createdAt: new Date().toISOString(),
       attempts: 0,
     },
@@ -193,4 +228,62 @@ export async function completeJob(path) {
 
 export async function failJob(path) {
   await rename(path, path.replace(/\.json$/, ".failed.json"));
+}
+
+// 解析飞书内交互命令（登录/验证码/账号管理）。命中则返回 {matched:true, kind, ...}；
+// 不命中返回 {matched:false} 放行给原 QR 触发路径 parseTriggerEvent。不读写队列、不走去重。
+export function parseInteractionCommand(data, triggerConfig) {
+  if (!triggerConfig?.loginInteractionEnabled) return { matched: false };
+
+  const message = data?.message;
+  const sender = data?.sender;
+
+  if (!message?.message_id || !message.chat_id) return { matched: false };
+  if (sender?.sender_type === "bot") return { matched: false };
+  if (message.message_type !== "text") return { matched: false };
+
+  // 群聊必须 @ 机器人（与 QR 触发一致，避免误触发与信息泄露）
+  if (message.chat_type === "group" && (!Array.isArray(message.mentions) || message.mentions.length === 0)) {
+    return { matched: false };
+  }
+
+  const text = parseTextContent(message.content);
+  if (text === null) return { matched: false };
+
+  const command = commandWithoutMentions(message, text);
+  const chatId = message.chat_id;
+  const ids = senderIds(sender);
+  const base = { chatId, sender, message, senderIds: ids };
+
+  let m;
+  if ((m = command.match(/^登录\s*(1\d{10})$/))) {
+    return { matched: true, kind: "login", phone: m[1], ...base };
+  }
+  if (command === "取消登录") {
+    return { matched: true, kind: "cancel", ...base };
+  }
+  if ((m = command.match(/^验证码\s*(\d{6})$/))) {
+    return { matched: true, kind: "verify", code: m[1], ...base };
+  }
+  if (command === "账号") {
+    return { matched: true, kind: "list", ...base };
+  }
+  if (command === "帮助" || command === "功能" || command === "功能介绍") {
+    return { matched: true, kind: "help", ...base };
+  }
+  if ((m = command.match(/^切换\s+(.+)$/))) {
+    return { matched: true, kind: "switch", query: m[1].trim(), ...base };
+  }
+  if (triggerConfig.loginBareCodeEnabled && (m = command.match(/^(\d{6})$/))) {
+    // 纯数字仅在「该 chat 有进行中会话」时才视为验证码，由 handler 判断；否则放行 QR 路径。
+    return { matched: true, kind: "verify-bare", code: m[1], ...base };
+  }
+
+  return { matched: false };
+}
+
+export function isLoginAuthorized(interaction, triggerConfig) {
+  const ids = interaction.senderIds || [];
+  return triggerConfig.allowedChatIds.has(interaction.chatId)
+    || ids.some((id) => triggerConfig.allowedSenderIds.has(id));
 }
