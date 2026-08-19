@@ -79,7 +79,14 @@ node skills/tml-qr/scripts/tml-users.mjs add --phone ... --nickname ... --userId
 
 ## 登录流程
 
-登录接口就绪后由 `tml-auth.mjs` 提供 `send-code` / `login` 两个子命令，Agent 按「问手机号 → 发验证码 → 问验证码 → 登录 → 写入 users.json」编排。
+`tml-auth.mjs` 提供登录相关子命令，Agent 按「问手机号 → 发验证码 → 问验证码 → 登录 → 写入 users.json」编排：
+
+```bash
+node skills/tml-qr/scripts/tml-auth.mjs send-code --phone 手机号                          # 发验证码
+node skills/tml-qr/scripts/tml-auth.mjs login --phone 手机号 --code 验证码 --smsId <id>   # 登录
+```
+
+`--smsId` 取自 `send-code` 响应的 `body.smsId`。两个都是 open 接口（无需 loginsession），`smsType=8`，约 60 秒发送间隔，不要频繁触发。登录响应的 `userId` 在 `body.userInfo.id`、`loginsession` 在 `body.loginsession`，脚本已处理；登录为单会话，会顶掉该手机号旧的 `loginsession`。
 
 ## 输出字段
 
